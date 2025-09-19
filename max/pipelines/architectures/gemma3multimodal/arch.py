@@ -16,28 +16,21 @@ from max.graph.weights import WeightsFormat
 from max.interfaces import PipelineTask
 from max.nn.kv_cache import KVCacheStrategy
 from max.pipelines.lib import (
-    RopeType,
     SupportedArchitecture,
     SupportedEncoding,
-    TextTokenizer,
+    RopeType,
 )
 
-from . import weight_adapters
+from .tokenizer import Gemma3MultimodalTokenizer  # Use our custom tokenizer
 from .model import Gemma3_MultiModalModel
+from . import weight_adapters
 
 gemma3_multimodal_arch = SupportedArchitecture(
     name="Gemma3ForConditionalGeneration",
     example_repo_ids=[
-        # it = Instruction tuned (recommended).
-        # pt = Pre-trained.
-        "google/gemma-3-12b-it",
-        "google/gemma-3-12b-pt",
         "google/gemma-3-4b-it",
-        "google/gemma-3-4b-pt",
         "google/gemma-3-12b-it",
-        "google/gemma-3-12b-pt",
         "google/gemma-3-27b-it",
-        "google/gemma-3-27b-pt",
     ],
     default_encoding=SupportedEncoding.bfloat16,
     supported_encodings={
@@ -46,7 +39,7 @@ gemma3_multimodal_arch = SupportedArchitecture(
     },
     pipeline_model=Gemma3_MultiModalModel,
     task=PipelineTask.TEXT_GENERATION,
-    tokenizer=TextTokenizer,
+    tokenizer=Gemma3MultimodalTokenizer,  # Our custom multimodal tokenizer
     default_weights_format=WeightsFormat.safetensors,
     multi_gpu_supported=True,
     rope_type=RopeType.normal,
