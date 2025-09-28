@@ -139,59 +139,13 @@ class Gemma3MultimodalModel(Gemma3Model):
             print("🔧 Starting vision graph building process...")
             
             try:
-                print("📦 Importing MAX modules...")
-                from max.graph import Graph, TensorType, ops, DeviceRef
-                from max.dtype import DType
-                
-                print("✅ MAX modules imported successfully")
-                
-                print("🎯 Creating MAX Graph with context manager...")
-                
-                # Define input type for images
-                input_type = TensorType(
-                    dtype=DType.float32,
-                    shape=[1, 3, 896, 896],  # [batch, channels, height, width]
-                    device=DeviceRef.GPU(),
+                self.vision_graph, self.language_graph = build_multimodal_graphs(
+                config=self.multimodal_config,
+                weights=self.weights,
+                dtype=self.dtype,
+                device=self.devices[0],
+                optimize=True
                 )
-                
-                # Create graph using context manager (the correct way!)
-                with Graph("vision_encoder_graph", input_types=[input_type]) as graph:
-                    print("🔍 Inside graph context manager...")
-                    
-                    # Get the input tensor
-                    pixel_values = graph.inputs[0]
-                    print(f"📊 Input tensor: {pixel_values}")
-                    
-                    # Calculate exact dimensions
-                    batch_size = 1
-                    input_elements = 3 * 896 * 896  # 2,408,448
-                    
-                    # Find dimensions that work exactly
-                    # We want [batch, num_patches, hidden_size]
-                    # Try different combinations that multiply to 2,408,448
-                    
-                    # Option 1: 2048 patches × 1176 hidden_size = 2,408,448 (EXACT!)
-                    num_patches = 2048
-                    hidden_size = input_elements // num_patches  # 1176
-                    
-                    print(f"📐 Target dimensions: batch={batch_size}, patches={num_patches}, hidden={hidden_size}")
-                    print(f"📐 Element count check: {batch_size * num_patches * hidden_size} == {input_elements}")
-                    
-                    # Step 1: Flatten the image: [1, 3, 896, 896] -> [1, 2408448]
-                    flattened = ops.reshape(pixel_values, [batch_size, -1])
-                    print(f"🔄 Flattened shape: {flattened.shape}")
-                    
-                    # Step 2: Reshape to vision tokens with EXACT element count
-                    vision_tokens = ops.reshape(flattened, [batch_size, num_patches, hidden_size])
-                    
-                    print(f"✅ Vision tokens shape: {vision_tokens.shape}")
-                    
-                    # Set the graph output
-                    graph.output(vision_tokens)
-                    print("📤 Graph output set")
-                    
-                # Store the created graph
-                self.vision_graph = graph
                 self._vision_graph_built = True
                 print("🎉 Vision graph building completed successfully!")
                 

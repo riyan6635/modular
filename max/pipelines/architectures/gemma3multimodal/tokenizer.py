@@ -79,6 +79,7 @@ class Gemma3MultimodalTokenizer(PipelineTokenizer[TextAndVisionContext, np.ndarr
 
         # Prepare pixel_values as before from request.images ...
         pixel_values: Tuple[np.ndarray, ...] = ()
+        print("In tokenizer new_context")
         if hasattr(request, "images") and request.images:
             arrays = []
             for i, img in enumerate(request.images):
@@ -109,6 +110,7 @@ class Gemma3MultimodalTokenizer(PipelineTokenizer[TextAndVisionContext, np.ndarr
             extra_model_args={},
             json_schema=None
         )
+        print("ctx", ctx)
         ctx.assign_to_cache(request.index)
         return ctx
 

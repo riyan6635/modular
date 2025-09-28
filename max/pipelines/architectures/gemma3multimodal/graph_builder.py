@@ -42,15 +42,18 @@ class VisionGraphBuilder:
         )
         
         # Build vision encoder
+        print("Building vision encoder...")
         vision_encoder = SigLIPVisionEncoder(
             vision_config, self.weights, self.dtype, self.device
         )
-        
+        print("Graph builder: Created vision encoder")
+        print("Built vision encoder")
         def vision_forward(pixel_values: TensorValue) -> TensorValue:
             """Vision encoder forward pass."""
             # Normalize pixel values to [-1, 1] range
             pixel_values = (pixel_values / 127.5) - 1.0
-            
+            print("Vision forward: Normalized pixel values")
+            print(f"Vision forward: pixel_values={pixel_values}")
             # Apply vision encoder
             vision_features = vision_encoder(pixel_values)
             
@@ -155,7 +158,10 @@ class MultimodalGraphBuilder:
         
         # Build language graph with vision integration
         language_graph = self.build_language_graph(vision_tokens_shape)
-        
+        print("Built language graph")
+        print("vision_graph", vision_graph)
+        print("-"*80)
+        print("language_graph", language_graph)
         return vision_graph, language_graph
 
 
@@ -299,7 +305,7 @@ def build_multimodal_graphs(
     builder = MultimodalGraphBuilder(
         config, weights, dtype, device, kv_params, max_seq_len
     )
-    
+    print("Building multimodal graphs...")
     vision_graph, language_graph = builder.build_complete_graph()
     
     if optimize:

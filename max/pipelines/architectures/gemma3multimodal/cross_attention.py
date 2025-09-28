@@ -8,9 +8,9 @@ from max.graph import DeviceRef, Dim, TensorType, TensorValue, ops
 from max.nn import Linear, LayerNorm
 from max.nn.layer import Layer
 from max.graph.weights import Weights
-
+import time
 from .model_config import SigLIPVisionConfig, CrossModalProjectorConfig
-
+import traceback
 logger = logging.getLogger(__name__)
 
 class SigLIPPatchEmbedding(Layer):
@@ -24,7 +24,7 @@ class SigLIPPatchEmbedding(Layer):
         device: DeviceRef,
     ):
         self.config = config
-        logger.info("Initializing SigLIP Patch Embedding")
+        print("Initializing SigLIP Patch Embedding")
         
         # Try multiple weight key patterns for patch embedding
         weight_keys_to_try = [
@@ -52,7 +52,7 @@ class SigLIPPatchEmbedding(Layer):
                     [config.hidden_size, config.num_channels, config.patch_size, config.patch_size],
                     device=device,
                 )
-                logger.info(f"Loaded patch embedding weights from: {weight_key}")
+                print(f"Loaded patch embedding weights from: {weight_key}")
                 break
             except (KeyError, AttributeError):
                 continue
@@ -65,14 +65,14 @@ class SigLIPPatchEmbedding(Layer):
                     [config.hidden_size],
                     device=device,
                 )
-                logger.info(f"Loaded patch embedding bias from: {bias_key}")
+                print(f"Loaded patch embedding bias from: {bias_key}")
                 break
             except (KeyError, AttributeError):
                 continue
         
         # If no actual weights found, create learnable parameters with proper initialization
         if self.weight is None:
-            logger.warning("Patch embedding weights not found, creating initialized parameters")
+            print("Patch embedding weights not found, creating initialized parameters")
             # Xavier/Glorot uniform initialization for Conv2d
             fan_in = config.num_channels * config.patch_size * config.patch_size
             fan_out = config.hidden_size * config.patch_size * config.patch_size
@@ -87,7 +87,7 @@ class SigLIPPatchEmbedding(Layer):
             ).astype(np.float32)
             
             self.weight = Tensor.from_numpy(weight_data).to(device)
-            logger.info("Initialized patch embedding weights with Xavier uniform")
+            print("Initialized patch embedding weights with Xavier uniform")
         
         if self.bias is None:
             self.bias = ops.zeros([config.hidden_size])
@@ -121,93 +121,120 @@ class SigLIPPatchEmbedding(Layer):
         return embeddings
 
 
-class SigLIPMultiHeadAttention(Layer):
-    """Multi-head self-attention for SigLIP vision encoder."""
-    
-    def __init__(
-        self,
-        config: SigLIPVisionConfig,
-        weights: Weights,
-        layer_idx: int,
-        dtype: DType,
-        device: DeviceRef,
-    ):
+class SigLIPMultiHeadAttention(Layer):    
+    def __init__(self, config, weights, layer_idx, dtype, device):
+        import time
+        
         self.config = config
         self.layer_idx = layer_idx
+        
+        # ✅ Initialize attention parameters first
         self.head_dim = config.hidden_size // config.num_attention_heads
         self.scale = 1.0 / math.sqrt(self.head_dim)
         self.num_heads = config.num_attention_heads
         
-        logger.info(f"Initializing SigLIP Attention Layer {layer_idx}")
+        # ✅ Initialize dropout
+        if hasattr(config, 'attention_dropout') and config.attention_dropout > 0.0:
+            self.dropout = lambda x: ops.dropout(x, config.attention_dropout)
+        else:
+            self.dropout = None
         
-        # Try different weight key patterns
+        # ✅ Check cache (fixed)
+        cache_key = f"{layer_idx}_{config.hidden_size}_{config.num_attention_heads}"
+        if not hasattr(self.__class__, '_weight_key_cache'):
+            self.__class__._weight_key_cache = {}
+            
+        if cache_key in self.__class__._weight_key_cache:
+            base_key = self.__class__._weight_key_cache[cache_key]
+            print(f"[LAYER {layer_idx}] Using cached weight key: {base_key}")
+            try:
+                self._load_weights(base_key, weights, config, dtype, device)
+                return
+            except Exception as e:
+                print(f"[LAYER {layer_idx}] Cached key failed: {e}")
+                # Fall through to try other keys
+
         base_keys_to_try = [
             f"vision_tower.vision_model.encoder.layers.{layer_idx}.self_attn",
             f"vision_model.encoder.layers.{layer_idx}.self_attn",
             f"vision_tower.encoder.layers.{layer_idx}.self_attn",
             f"model.vision_tower.vision_model.encoder.layers.{layer_idx}.self_attn",
         ]
+        base_keys = [f"vision_tower.vision_model.encoder.layers.{name}.weight" for name in ["q_proj", "k_proj", "v_proj", "out_proj"]]
         
-        self.q_proj = None
-        self.k_proj = None 
-        self.v_proj = None
-        self.out_proj = None
-        
-        # Try to load actual attention weights
-        for base_key in base_keys_to_try:
+        success = False
+        for base_key in base_keys:
+            print(f"[LAYER {layer_idx}] Trying weight key: {base_key}")
             try:
-                self.q_proj = Linear(
-                    weights[f"{base_key}.q_proj.weight"].allocate(
-                        dtype, [config.hidden_size, config.hidden_size], device=device
-                    ),
-                    weights[f"{base_key}.q_proj.bias"].allocate(
-                        dtype, [config.hidden_size], device=device
-                    ) if f"{base_key}.q_proj.bias" in weights else None,
-                )
-                
-                self.k_proj = Linear(
-                    weights[f"{base_key}.k_proj.weight"].allocate(
-                        dtype, [config.hidden_size, config.hidden_size], device=device
-                    ),
-                    weights[f"{base_key}.k_proj.bias"].allocate(
-                        dtype, [config.hidden_size], device=device
-                    ) if f"{base_key}.k_proj.bias" in weights else None,
-                )
-                
-                self.v_proj = Linear(
-                    weights[f"{base_key}.v_proj.weight"].allocate(
-                        dtype, [config.hidden_size, config.hidden_size], device=device
-                    ),
-                    weights[f"{base_key}.v_proj.bias"].allocate(
-                        dtype, [config.hidden_size], device=device
-                    ) if f"{base_key}.v_proj.bias" in weights else None,
-                )
-                
-                self.out_proj = Linear(
-                    weights[f"{base_key}.out_proj.weight"].allocate(
-                        dtype, [config.hidden_size, config.hidden_size], device=device
-                    ),
-                    weights[f"{base_key}.out_proj.bias"].allocate(
-                        dtype, [config.hidden_size], device=device
-                    ) if f"{base_key}.out_proj.bias" in weights else None,
-                )
-                
-                logger.info(f"Loaded attention weights from: {base_key}")
+                self._load_weights(base_key, weights, config, dtype, device)
+                print(f"[LAYER {layer_idx}] SUCCESS with {base_key}")
+                self.__class__._weight_key_cache[cache_key] = base_key
+                success = True
                 break
-                
-            except (KeyError, AttributeError):
+            except Exception as e:
+                print(f"[LAYER {layer_idx}] FAILED {base_key}: {e}")
                 continue
         
-        # Create initialized projections if not found
-        if self.q_proj is None:
-            logger.warning(f"Creating initialized attention projections for layer {layer_idx}")
+        if not success:
+            print(f"[LAYER {layer_idx}] Creating initialized attention projections")
             self._create_initialized_projections(config, dtype, device)
+
+    def _load_weights(self, base_key, weights, config, dtype, device):
+        import time
         
-        # Dropout
-        if config.attention_dropout > 0.0:
-            self.dropout = lambda x: ops.dropout(x, config.attention_dropout)
-        else:
-            self.dropout = None
+        # ✅ Validate all keys exist first
+        required_keys = [f"{base_key}.{name}.weight" for name in ["q_proj", "k_proj", "v_proj", "out_proj"]]
+        missing_keys = [key for key in required_keys if key not in weights]
+        if missing_keys:
+            raise KeyError(f"Missing weights: {missing_keys}")
+        
+        # ✅ Load weights with proper error handling
+        def safe_alloc_weight(name, shape):
+            start = time.time()
+            try:
+                w = weights[f"{base_key}.{name}.weight"].allocate(dtype, shape, device=device)
+                elapsed = time.time() - start
+                print(f"[LAYER {self.layer_idx}] {name} weight allocated in {elapsed:.2f}s")
+                return w
+            except Exception as e:
+                elapsed = time.time() - start
+                print(f"[LAYER {self.layer_idx}] {name} weight FAILED in {elapsed:.2f}s: {e}")
+                raise
+        
+        def safe_alloc_bias(name, shape):
+            bias_key = f"{base_key}.{name}.bias"
+            if bias_key in weights:
+                start = time.time()
+                try:
+                    b = weights[bias_key].allocate(dtype, shape, device=device)
+                    elapsed = time.time() - start
+                    print(f"[LAYER {self.layer_idx}] {name} bias allocated in {elapsed:.2f}s")
+                    return b
+                except Exception as e:
+                    elapsed = time.time() - start
+                    print(f"[LAYER {self.layer_idx}] {name} bias FAILED in {elapsed:.2f}s: {e}")
+                    return None
+            return None
+        
+        # Create projections
+        from torch import nn
+
+        self.q_proj = nn.Linear(
+            safe_alloc_weight("q_proj", [config.hidden_size, config.hidden_size]), 
+            safe_alloc_bias("q_proj", [config.hidden_size])
+        )
+        self.k_proj = nn.Linear(
+            safe_alloc_weight("k_proj", [config.hidden_size, config.hidden_size]), 
+            safe_alloc_bias("k_proj", [config.hidden_size])
+        )
+        self.v_proj = nn.Linear(
+            safe_alloc_weight("v_proj", [config.hidden_size, config.hidden_size]), 
+            safe_alloc_bias("v_proj", [config.hidden_size])
+        )
+        self.out_proj = nn.Linear(
+            safe_alloc_weight("out_proj", [config.hidden_size, config.hidden_size]), 
+            safe_alloc_bias("out_proj", [config.hidden_size])
+        )
     
     def _create_initialized_projections(self, config, dtype, device):
         """Create properly initialized attention projections."""
@@ -285,7 +312,7 @@ class SigLIPMLP(Layer):
     ):
         self.config = config
         
-        logger.info(f"Initializing SigLIP MLP Layer {layer_idx}")
+        print(f"Initializing SigLIP MLP Layer {layer_idx}")
         
         # Try different MLP weight key patterns
         base_keys_to_try = [
@@ -319,7 +346,7 @@ class SigLIPMLP(Layer):
                     ) if f"{base_key}.fc2.bias" in weights else None,
                 )
                 
-                logger.info(f"Loaded MLP weights from: {base_key}")
+                print(f"Loaded MLP weights from: {base_key}")
                 break
                 
             except (KeyError, AttributeError):
@@ -327,7 +354,7 @@ class SigLIPMLP(Layer):
         
         # Create initialized MLPs if not found
         if self.fc1 is None:
-            logger.warning(f"Creating initialized MLP for layer {layer_idx}")
+            print(f"Creating initialized MLP for layer {layer_idx}")
             self._create_initialized_mlp(config, dtype, device)
         
         # Set activation function
@@ -338,7 +365,7 @@ class SigLIPMLP(Layer):
         elif config.hidden_act == "silu" or config.hidden_act == "swish":
             self.activation = ops.silu
         else:
-            logger.warning(f"Unknown activation {config.hidden_act}, using GELU")
+            print(f"Unknown activation {config.hidden_act}, using GELU")
             self.activation = ops.gelu
     
     def _create_initialized_mlp(self, config, dtype, device):
@@ -381,12 +408,13 @@ class SigLIPEncoderLayer(Layer):
         device: DeviceRef,
     ):
         self.layer_idx = layer_idx
-        logger.info(f"Initializing SigLIP Encoder Layer {layer_idx}")
+        print(f"Initializing SigLIP Encoder Layer {layer_idx}")
         
         # Initialize attention and MLP components
         self.self_attn = SigLIPMultiHeadAttention(config, weights, layer_idx, dtype, device)
         self.mlp = SigLIPMLP(config, weights, layer_idx, dtype, device)
-        
+        print("self_attn :",self.self_attn)
+        print("mlp :",self.mlp)
         # Try different layer norm key patterns
         base_keys_to_try = [
             f"vision_tower.vision_model.encoder.layers.{layer_idx}",
@@ -401,6 +429,8 @@ class SigLIPEncoderLayer(Layer):
         # Try to load actual layer norm weights
         for base_key in base_keys_to_try:
             try:
+                print("base_key :",base_key)
+                print("weights :",weights, )
                 self.layer_norm1 = LayerNorm(
                     weights[f"{base_key}.layer_norm1.weight"].allocate(
                         dtype, [config.hidden_size], device=device
@@ -421,7 +451,7 @@ class SigLIPEncoderLayer(Layer):
                     eps=config.layer_norm_eps,
                 )
                 
-                logger.info(f"Loaded layer norms from: {base_key}")
+                print(f"Loaded layer norms from: {base_key}")
                 break
                 
             except (KeyError, AttributeError):
@@ -429,7 +459,7 @@ class SigLIPEncoderLayer(Layer):
         
         # Create initialized layer norms if not found
         if self.layer_norm1 is None:
-            logger.warning(f"Creating initialized layer norms for layer {layer_idx}")
+            print(f"Creating initialized layer norms for layer {layer_idx}")
             self._create_initialized_layer_norms(config, dtype, device)
     
     def _create_initialized_layer_norms(self, config, dtype, device):
@@ -480,34 +510,43 @@ class SigLIPVisionEncoder(Layer):
         device: DeviceRef,
     ):
         self.config = config
-        logger.info("Initializing SigLIP Vision Encoder")
-        
+        print("Initializing SigLIP Vision Encoder")
+        print("SIGLIP_ENCODER: Creating patch embedding...")
         # Initialize patch embeddings
         self.embeddings = SigLIPPatchEmbedding(config, weights, dtype, device)
-        
+        print("SIGLIP_ENCODER: Patch embedding created successfully")
         # Try to load position embeddings
         pos_embed_keys_to_try = [
-            "vision_tower.vision_model.embeddings.position_embedding",
+            "vision_tower.vision_model.embeddings.position_embedding.weight",
             "vision_model.embeddings.position_embedding", 
             "vision_tower.embeddings.position_embedding",
             "model.vision_tower.vision_model.embeddings.position_embedding",
         ]
         
         self.position_embedding = None
-        
+        # print("Available keys in weights:")
+        # for key in weights.keys:
+        #     print(key)
+        print("Listing all weights keys:")
+        for key, value in weights.items():
+            print(key)
+
         for pos_key in pos_embed_keys_to_try:
             try:
+                print("SIGLIP_ENCODER: Creating position embeddings...")
                 self.position_embedding = weights[pos_key].allocate(
                     dtype, [config.num_patches, config.hidden_size], device=device
                 )
-                logger.info(f"Loaded position embeddings from: {pos_key}")
+                print(f"Loaded position embeddings from: {pos_key}")
                 break
             except (KeyError, AttributeError):
+                print(f"Position embedding key {pos_key} not found, trying next...")
+                traceback.format_exc()
                 continue
         
         # Create initialized position embeddings if not found
         if self.position_embedding is None:
-            logger.warning("Creating initialized position embeddings")
+            print("Creating initialized position embeddings")
             import numpy as np
             from max.driver import Tensor
             
@@ -524,9 +563,13 @@ class SigLIPVisionEncoder(Layer):
         # Create transformer layers - limit to reasonable number for stability
         self.layers = []
         num_layers_to_create = min(config.num_hidden_layers, 12)
-        logger.info(f"Creating {num_layers_to_create} transformer layers")
+        print(f"Creating {num_layers_to_create} transformer layers")
         
         for i in range(num_layers_to_create):
+            
+            start_time = time.time()
+            print(f"Starting layer {i} creation...")
+            print("config :", config,"weights :", weights, i,"dtype :", dtype, device)
             layer = SigLIPEncoderLayer(config, weights, i, dtype, device)
             self.layers.append(layer)
         
@@ -551,14 +594,14 @@ class SigLIPVisionEncoder(Layer):
                     ) if f"{post_ln_key}.bias" in weights else None,
                     eps=config.layer_norm_eps,
                 )
-                logger.info(f"Loaded post layer norm from: {post_ln_key}")
+                print(f"Loaded post layer norm from: {post_ln_key}")
                 break
             except (KeyError, AttributeError):
                 continue
         
         # Create initialized post layer norm if not found
         if self.post_layernorm is None:
-            logger.warning("Creating initialized post layer norm")
+            print("Creating initialized post layer norm")
             import numpy as np
             from max.driver import Tensor
             
@@ -576,12 +619,13 @@ class SigLIPVisionEncoder(Layer):
         else:
             self.dropout = None
         
-        logger.info("SigLIP Vision Encoder initialization complete")
+        print("SigLIP Vision Encoder initialization complete")
     
     def __call__(self, pixel_values: TensorValue) -> TensorValue:
-        """Encode image to vision features."""
         logger.debug("SigLIP Vision Encoder: Processing image...")
-        
+        print("In cross attention.py")
+        print("SigLIP Vision Encoder: Processing image...")
+
         # Convert to patch embeddings
         embeddings = self.embeddings(pixel_values)
         
@@ -615,7 +659,7 @@ class CrossModalProjector(Layer):
         device: DeviceRef,
     ):
         self.config = config
-        logger.info("Initializing Cross-Modal Projector")
+        print("Initializing Cross-Modal Projector")
         
         # Try different projector weight key patterns
         projector_keys_to_try = [
@@ -645,7 +689,7 @@ class CrossModalProjector(Layer):
                             dtype, [config.language_hidden_size], device=device
                         ) if bias_key in weights else None,
                     )
-                    logger.info(f"Loaded linear projector from: {base_key}")
+                    print(f"Loaded linear projector from: {base_key}")
                     break
                     
                 except (KeyError, AttributeError):
@@ -653,7 +697,7 @@ class CrossModalProjector(Layer):
             
             # Create initialized projector if not found
             if self.projector is None:
-                logger.warning("Creating initialized linear projector")
+                print("Creating initialized linear projector")
                 import numpy as np
                 from max.driver import Tensor
                 
@@ -692,7 +736,7 @@ class CrossModalProjector(Layer):
                         ) if f"{base_key}.mlp.fc2.bias" in weights else None,
                     )
                     
-                    logger.info(f"Loaded MLP projector from: {base_key}")
+                    print(f"Loaded MLP projector from: {base_key}")
                     break
                     
                 except (KeyError, AttributeError):
@@ -700,7 +744,7 @@ class CrossModalProjector(Layer):
             
             # Create initialized MLP projector if not found
             if not hasattr(self, 'fc1'):
-                logger.warning("Creating initialized MLP projector")
+                print("Creating initialized MLP projector")
                 self._create_initialized_mlp_projector(config, dtype, device, intermediate_size)
             
             # Set activation function
@@ -711,13 +755,13 @@ class CrossModalProjector(Layer):
             elif config.hidden_act == "silu":
                 self.activation = ops.silu
             else:
-                logger.warning(f"Unknown activation {config.hidden_act}, using GELU")
+                print(f"Unknown activation {config.hidden_act}, using GELU")
                 self.activation = ops.gelu
         
         else:
             raise ValueError(f"Unsupported projector type: {config.projector_type}")
         
-        logger.info(f"Cross-Modal Projector ({config.projector_type}) initialized")
+        print(f"Cross-Modal Projector ({config.projector_type}) initialized")
     
     def _create_initialized_mlp_projector(self, config, dtype, device, intermediate_size):
         """Create properly initialized MLP projector.""" 
