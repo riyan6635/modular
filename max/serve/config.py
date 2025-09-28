@@ -127,7 +127,7 @@ class Settings(BaseSettings):
 
     # Telemetry and logging configuration
     logs_console_level: Union[str, None] = Field(
-        default="INFO",
+        default="DEBUG",
         description="Logging level",
         alias="MAX_SERVE_LOGS_CONSOLE_LEVEL",
     )
