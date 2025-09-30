@@ -86,14 +86,18 @@ class SigLIPPatchEmbedding(Layer):
         # Apply 2D convolution for patch embedding
         # Input: [batch, channels, height, width]
         # Output: [batch, hidden_size, num_patches_h, num_patches_w]
+        pixel_values = ops.transpose(pixel_values, 1, 2)
+        pixel_values = ops.transpose(pixel_values, 2, 3)
+        self.weight = ops.transpose(self.weight, 2, 3)
+        self.weight = ops.transpose(self.weight, 3, 2)
         embeddings = ops.conv2d(
             pixel_values,
             self.weight,
             bias=self.bias,
             stride=[self.config.patch_size, self.config.patch_size],
             padding=[0, 0, 0, 0],       # Four values: [pad_h_before, pad_w_before, pad_h_after, pad_w_after]
-            input_layout=ConvInputLayout.NCHW,         # Match your tensor format
-            filter_layout=FilterLayout.FCRS,        # [out, in, h, w]
+            input_layout=ConvInputLayout.NHWC,         # Match your tensor format
+            filter_layout=FilterLayout.FCRS,        # RSCF[out, in, h, w]FCRS
         )
         
         # Get dimensions
