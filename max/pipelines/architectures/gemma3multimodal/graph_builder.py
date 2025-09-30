@@ -5,7 +5,7 @@ from max.dtype import DType
 from max.graph import DeviceRef, Dim, Graph, TensorType, TensorValue, ops
 from max.graph.weights import Weights
 from max.nn.kv_cache import KVCacheParams
-
+from max.driver import Accelerator, CPU
 from .model_config import Gemma3MultimodalConfig, SigLIPVisionConfig, CrossModalProjectorConfig
 from .cross_attention import CrossModalProjector, SigLIPVisionEncoder
 
@@ -23,11 +23,15 @@ class VisionGraphBuilder:
         self.config = config
         self.weights = weights
         self.dtype = dtype
-        self.device = device
+        if isinstance(device, Accelerator):
+            self.device = DeviceRef.GPU()
+        else:
+            self.device = DeviceRef.CPU()
     
     def build_vision_graph(self) -> Graph:
         """Build vision encoder graph."""
         vision_config = self.config.vision_config
+        
         
         # Input tensor type for images
         input_type = TensorType(
@@ -81,7 +85,10 @@ class MultimodalGraphBuilder:
         self.config = config
         self.weights = weights
         self.dtype = dtype
-        self.device = device
+        if isinstance(device, Accelerator):
+            self.device = DeviceRef.GPU()
+        else:
+            self.device = DeviceRef.CPU()
         self.kv_params = kv_params
         self.max_seq_len = max_seq_len
     
@@ -106,7 +113,7 @@ class MultimodalGraphBuilder:
             shape=["batch_size", "seq_len"],
             device=self.device,
         )
-        
+        print("Build cross-modal projector")
         # Build cross-modal projector
         projector = CrossModalProjector(
             self.config.projector_config,
@@ -178,7 +185,10 @@ class OptimizedMultimodalGraph:
         self.config = config
         self.weights = weights
         self.dtype = dtype
-        self.device = device
+        if isinstance(device, Accelerator):
+            self.device = DeviceRef.GPU()
+        else:
+            self.device = DeviceRef.CPU()
     
     def build_fused_graph(self) -> Graph:
         """Build fused vision-language graph for optimal performance."""

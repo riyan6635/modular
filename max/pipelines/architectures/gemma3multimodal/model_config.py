@@ -46,7 +46,7 @@ class CrossModalProjectorConfig:
     
     # Input/output dimensions
     vision_hidden_size: int = 1152  # From SigLIP
-    language_hidden_size: int = 3072  # From Gemma3
+    language_hidden_size: int = 2560  # From Gemma3
     
     # Projector architecture
     projector_type: str = "linear"  # "linear" or "mlp"

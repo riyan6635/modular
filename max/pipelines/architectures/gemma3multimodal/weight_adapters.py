@@ -53,6 +53,8 @@ def convert_safetensor_state_dict(
         # Log mapping if changed
         if weight_name != max_name:
             print(f"Weight mapping: {weight_name} -> {max_name}")
+        else:
+            print(f"Weight kept as-is: {weight_name}")
     
     # Handle quantization config if present
     hf_quant_config = getattr(huggingface_config, "quantization_config", None)
@@ -76,5 +78,8 @@ def convert_safetensor_state_dict(
     
     print(f"Successfully converted {len(state_dict)} -> {len(new_state_dict)} weights")
     print(f"Weight distribution: Language={language_weights}, Vision={vision_weights}, Projector={projector_weights}")
-    
+    #save in text file
+    with open("gemma3multimodal_weight_mapping.txt", "w") as f:
+        for k, v in new_state_dict.items():
+            f.write(f"{k}\n")
     return new_state_dict

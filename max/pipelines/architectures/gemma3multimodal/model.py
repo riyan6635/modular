@@ -30,8 +30,7 @@ logger.setLevel(logging.INFO)
 # Import your multimodal components
 from .model_config import Gemma3MultimodalConfig, SigLIPVisionConfig, CrossModalProjectorConfig
 from .cross_attention import SigLIPVisionEncoder, CrossModalProjector
-from .graph_builder import build_multimodal_graphs
-
+from .graph_builder import build_multimodal_graphs, VisionGraphBuilder
 
 class Gemma3MultimodalModel(Gemma3Model):
     """Gemma3 Multimodal model with vision processing."""
@@ -65,7 +64,6 @@ class Gemma3MultimodalModel(Gemma3Model):
         print(f"Model dtype after super: {self.dtype}")
         
         # Skip weight debugging for now to avoid the error
-        print("=== SKIPPING WEIGHT DEBUGGING ===")
         print("=" * 50)
         
         # Create proper multimodal config
@@ -93,7 +91,7 @@ class Gemma3MultimodalModel(Gemma3Model):
         # Build projector config
         projector_config = CrossModalProjectorConfig(
             vision_hidden_size=1152,
-            language_hidden_size=3072,
+            language_hidden_size=2560,
             projector_type="linear",
             num_layers=1,
         )
@@ -160,191 +158,7 @@ class Gemma3MultimodalModel(Gemma3Model):
         else:
             print("📋 Vision graph already exists, skipping...")
 
-    def prepare_initial_token_inputs(
-        self,
-        context_batch: Sequence[TextAndVisionContext],
-        kv_cache_inputs=None,
-        return_n_logits: int = 1,
-    ) -> ModelInputs:
-        print("=" * 80)
-        print("=== MULTIMODAL PREPARE_INITIAL_TOKEN_INPUTS CALLED ===")
-        print("=" * 80)
-        
-        # Check if we have vision inputs
-        vision_tokens_np = None
-        has_vision = any(hasattr(ctx, 'pixel_values') and ctx.pixel_values 
-                        for ctx in context_batch)
-        
-        if has_vision:
-            print("🖼️ Vision input detected, building vision components...")
-            self._build_vision_components_if_needed()
-            
-            # Check if vision graph was built successfully
-            if hasattr(self, 'vision_graph') and self.vision_graph is not None:
-                print("✅ Vision graph exists, proceeding with compilation...")
-                
-                # Load (compile) the vision graph
-                if not hasattr(self, "vision_model") or self.vision_model is None:
-                    print("🎯 Loading/compiling vision graph...")
-                    
-                    # Use same device as graph
-                    device = CPU() if accelerator_count() == 0 else Accelerator()
-                    vision_session = InferenceSession(devices=[device])
-                    self.vision_model = vision_session.load(self.vision_graph)
-                    print("✅ Vision graph loaded and compiled")
-                else:
-                    print("📋 Vision model already compiled, skipping...")
-                print("🚀 Executing vision model on image data...")
-                for i, ctx in enumerate(context_batch):
-                    if hasattr(ctx, 'pixel_values') and ctx.pixel_values:
-                        try:
-                            import numpy as np
-                            from max.driver import Tensor
-                            from PIL import Image
-                            # Get and preprocess the image
-                            pixel_array = ctx.pixel_values[0].astype(np.float32)
-                            
-                            # Resize to expected input size (896x896)
-                            if pixel_array.shape[:2] != (896, 896):
-                                pil_img = Image.fromarray(pixel_array.astype(np.uint8))
-                                pil_img = pil_img.resize((896, 896))
-                                pixel_array = np.array(pil_img).astype(np.float32)
-                            
-                            # Normalize and reshape: [H,W,C] -> [1,C,H,W]
-                            pixel_array = (pixel_array / 127.5) - 1.0
-                            pixel_array = pixel_array.transpose(2, 0, 1)[None]  # [1,C,H,W]
-                            
-                            print(f"📸 Preprocessed image tensor shape: {pixel_array.shape}")
-                            
-                            # Create MAX Tensor and execute
-                            device = CPU() if accelerator_count() == 0 else Accelerator()
-                            pixel_tensor = Tensor.from_numpy(pixel_array).to(device)
-                            
-                            # Execute the vision model
-                            vision_outputs = self.vision_model.execute(pixel_tensor)
-                            vision_tokens = vision_outputs[0]
-                            
-                            if hasattr(vision_tokens, 'to'):
-                                vision_tokens = vision_tokens.to(CPU())
-                            
-                            print(f"✅ Got vision tokens shape: {vision_tokens.shape}")
-                            print(f"🎯 Vision tokens tensor type: {type(vision_tokens)}")
-                            
-                            # TODO: Integrate vision_tokens into text sequence
-                            # This is where you'd prepend/insert the vision tokens into the text input
-                            vision_tokens_result = vision_tokens
-                            break  # Process only first image for now
-                            
-                        except Exception as e:
-                            print(f"❌ Error executing vision model on image {i}: {e}")
-                            import traceback
-                            traceback.print_exc()
-                            vision_tokens_result = None
-            else:           
-                print("❌ No vision graph available, skipping vision processing")
-                
-        else:
-            print("📝 Text-only input, skipping vision processing")
-        
-        # Get text inputs from parent
-        if 'vision_tokens_result' in locals() and vision_tokens_result is not None:
-            # Convert MAX tensor to numpy for integration
-            vision_tokens_np = vision_tokens_result.to_numpy()  # ← Use the stored result
-            print(f"🔗 Converting vision tokens for integration: {vision_tokens_np.shape}")
-        else:
-            vision_tokens_np = None
-            print("❌ No vision tokens available for integration")
-        print(f"🔗 Converting vision tokens for integration: {vision_tokens_np.shape}")
-        text_inputs = super().prepare_initial_token_inputs(
-            context_batch, kv_cache_inputs, return_n_logits
-        )
-        if vision_tokens_np is not None:
-            print("🔀 Integrating vision and text tokens...")
-            
-            # Get the text token IDs
-        #     if hasattr(text_inputs, 'input_ids'):
-        #         token_ids = text_inputs.input_ids
-        #         print(f"✅ Found input_ids: {token_ids.shape}")
-        #     elif hasattr(text_inputs, 'tokens'):
-        #         token_ids = text_inputs.tokens
-        #         print(f"✅ Found tokens: {token_ids.shape}")
-        #     elif hasattr(text_inputs, 'input_tokens'):
-        #         token_ids = text_inputs.input_tokens
-        #         print(f"✅ Found input_tokens: {token_ids.shape}")
-        #     else:
-        #         print("❌ Could not find token IDs in text_inputs")
-        #         print(f"Available attributes: {[attr for attr in dir(text_inputs) if not attr.startswith('_')]}")
-        #         print("All attributes:", text_inputs.__dict__)
-                
-        #         # For now, just log and return unmodified inputs
-        #         print("⚠️ Returning unmodified text inputs for now")
-        #         return text_inputs
-            
-        #     # Store vision embeddings for later use (if possible)
-        #     try:
-        #         text_inputs.vision_embeddings = vision_tokens_np
-        #         text_inputs.num_vision_tokens = vision_tokens_np.shape[1]
-        #         print(f"✅ Stored vision embeddings in text_inputs")
-        #     except Exception as e:
-        #         print(f"⚠️ Could not store vision embeddings: {e}")
-            
-        #     print(f"🎯 Vision integration attempted!")
-        
-        # print("=== MULTIMODAL PREPARE_INITIAL_TOKEN_INPUTS COMPLETED ===")
-        # return text_inputs
-
-            text_tokens = text_inputs.tokens  # Shape: (text_seq_len,)
-            text_seq_len = text_tokens.shape[0]
-            
-            print(f"📊 Text tokens shape: {text_tokens.shape}")
-            print(f"📊 Vision tokens shape: {vision_tokens_np.shape}")
-            
-            # Create vision token IDs (using special token ID for vision patches)
-            vision_token_id = 32000  # Special token ID for vision
-            num_vision_patches = vision_tokens_np.shape[1]  # 2048
-            
-            # Create vision token IDs array: [num_vision_patches]
-            if hasattr(text_tokens, 'to_numpy'):
-                text_tokens_np = text_tokens.to_numpy()
-                numpy_dtype = text_tokens_np.dtype  # This will be numpy.int64 or similar
-            else:
-                text_tokens_np = text_tokens
-                numpy_dtype = text_tokens_np.dtype
-            import numpy as np
-            vision_token_ids = np.full((num_vision_patches,), vision_token_id, dtype=numpy_dtype)
-            print(f"🔢 Vision token IDs shape: {vision_token_ids.shape}, dtype: {vision_token_ids.dtype}")
-            print(f"🔢 Text tokens shape: {text_tokens_np.shape}, dtype: {text_tokens_np.dtype}")
     
-            # Concatenate vision tokens BEFORE text tokens: [vision_tokens, text_tokens]
-                
-            combined_tokens = np.concatenate([vision_token_ids, text_tokens_np])
-            
-            print(f"🎯 Combined token sequence: vision({num_vision_patches}) + text({text_seq_len}) = {combined_tokens.shape}")
-            
-            # Convert back to MAX Tensor if original was MAX Tensor
-            if hasattr(text_tokens, 'to_numpy'):
-                from max.driver import Tensor
-                combined_tensor = Tensor.from_numpy(combined_tokens)
-                if hasattr(text_tokens, 'device'):
-                    combined_tensor = combined_tensor.to(text_tokens.device)
-                text_inputs.tokens = combined_tensor
-            else:
-                text_inputs.tokens = combined_tokens
-            
-            # Store vision embeddings and metadata for the model to use
-            text_inputs.vision_embeddings = vision_tokens_np.squeeze(0)  # Remove batch dim: (2048, 1176)
-            text_inputs.num_vision_tokens = num_vision_patches
-            text_inputs.vision_token_id = vision_token_id
-            
-            print(f"✅ Successfully integrated vision tokens!")
-            print(f"🎯 Final token sequence shape: {text_inputs.tokens.shape}")
-            print(f"🎯 Vision embeddings stored: {text_inputs.vision_embeddings.shape}")
-            
-        print("=== MULTIMODAL PREPARE_INITIAL_TOKEN_INPUTS COMPLETED ===")
-        return text_inputs
-
-
-
     def prepare_initial_token_inputs(
         self,
         context_batch: Sequence[TextAndVisionContext],
@@ -362,7 +176,6 @@ class Gemma3MultimodalModel(Gemma3Model):
         # Check if we have vision inputs
         has_vision = any(hasattr(ctx, 'pixel_values') and ctx.pixel_values
                         for ctx in context_batch)
-
         if has_vision:
             print("🖼️ Vision input detected, building vision components...")
             self._build_vision_components_if_needed()
@@ -372,7 +185,13 @@ class Gemma3MultimodalModel(Gemma3Model):
                 print("🎯 Loading/compiling vision graph...")
                 try:
                     if not hasattr(self, "vision_graph") or self.vision_graph is None:
-                        self.vision_graph = self._build_vision_graph()
+                        self.vision_graph, self.language_graph = build_multimodal_graphs(
+                            config=self.multimodal_config,
+                            weights=self.weights,
+                            dtype=self.dtype,
+                            device=self.devices[0],
+                            optimize=True
+                            )
                     self.vision_model = self.session.load(
                         self.vision_graph,
                         weights_registry=self.weights.allocated_weights,
