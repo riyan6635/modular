@@ -166,7 +166,6 @@ class MultimodalGraphBuilder:
         # Build language graph with vision integration
         language_graph = self.build_language_graph(vision_tokens_shape)
         print("Built language graph")
-        print("vision_graph", vision_graph)
         print("-"*80)
         print("language_graph", language_graph)
         return vision_graph, language_graph

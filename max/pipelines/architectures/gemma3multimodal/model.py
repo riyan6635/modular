@@ -49,6 +49,7 @@ class Gemma3MultimodalModel(Gemma3Model):
         adapter: Optional[WeightsAdapter] = None,
         return_logits = None,
     ) -> None:
+        
         self.session = session
         print("=== Gemma3MultimodalModel __init__ called ===")
         
@@ -141,7 +142,7 @@ class Gemma3MultimodalModel(Gemma3Model):
                 config=self.multimodal_config,
                 weights=self.weights,
                 dtype=self.dtype,
-                device=self.devices[0],
+                device=CPU(),  # Use CPU for graph building
                 optimize=True
                 )
                 self._vision_graph_built = True
@@ -229,7 +230,7 @@ class Gemma3MultimodalModel(Gemma3Model):
 
                 try:
                     device = self.devices[0]
-                    pixel_tensor = Tensor.from_numpy(pixel_array).to(device)
+                    pixel_tensor = Tensor.from_numpy(pixel_array).to(CPU())
                     vision_outputs = self.vision_model.execute(pixel_tensor)
                     vision_tokens = vision_outputs[0] if isinstance(vision_outputs, (list, tuple)) else vision_outputs
                     if hasattr(vision_tokens, 'to'):
@@ -249,7 +250,8 @@ class Gemma3MultimodalModel(Gemma3Model):
 
                 except Exception as e:
                     print(f"❌ Vision model execution failed: {e}")
-                    import traceback; traceback.print_exc()
+                    import traceback
+                    traceback.print_exc()
                     has_vision = False
 
             else:
